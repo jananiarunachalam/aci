@@ -4,6 +4,7 @@
 
 import * as Sentry from "@sentry/nextjs";
 import { SentryOptions } from "./sentryoptions";
+import { color } from "motion/react";
 
 if (
   process.env.NEXT_PUBLIC_ENVIRONMENT &&
@@ -15,7 +16,14 @@ if (
     environment: process.env.NEXT_PUBLIC_ENVIRONMENT,
 
     // Add optional integrations for additional features
-    integrations: [Sentry.replayIntegration()],
+    integrations: [
+      Sentry.replayIntegration(),
+      Sentry.feedbackIntegration({
+        colorScheme: "system",
+        buttonLabel: "Send feedback",
+        buttonPosition: "bottom-right",
+      }),
+    ],
 
     // Define how likely traces are sampled. Adjust this value in production, or use tracesSampler for greater control.
     tracesSampleRate:
