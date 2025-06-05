@@ -12,6 +12,7 @@ import { useMetaInfo } from "@/components/context/metainfo";
 import { getApiKey } from "@/lib/api/util";
 import { AppConfig } from "@/lib/types/appconfig";
 import { toast } from "sonner";
+import { linkedAccountKeys } from "./use-linked-account";
 
 // TODO: think about what happens when the active project changes, and how to invalidate
 // the cache. May need to add project id to the query key.
@@ -53,6 +54,7 @@ type CreateAppConfigParams = {
     oauth2?: {
       client_id: string;
       client_secret: string;
+      redirect_url?: string;
     } | null;
   };
 };
@@ -128,6 +130,9 @@ export const useDeleteAppConfig = () => {
       });
       queryClient.invalidateQueries({
         queryKey: appConfigKeys.detail(activeProject.id, app_name),
+      });
+      queryClient.invalidateQueries({
+        queryKey: linkedAccountKeys.all(activeProject.id),
       });
     },
     onError: (error) => {

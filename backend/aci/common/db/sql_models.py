@@ -108,6 +108,9 @@ class Project(Base):
     app_configurations: Mapped[list[AppConfiguration]] = relationship(
         "AppConfiguration", lazy="select", cascade="all, delete-orphan", init=False
     )
+    linked_accounts: Mapped[list[LinkedAccount]] = relationship(
+        "LinkedAccount", lazy="select", cascade="all, delete-orphan", init=False
+    )
 
 
 class Agent(Base):
@@ -435,6 +438,11 @@ class LinkedAccount(Base):
             "linked_account_owner_id",
             name="uc_project_app_linked_account_owner",
         ),
+    )
+
+    # deleting linked account will delete all associated secrets
+    secrets: Mapped[list[Secret]] = relationship(
+        "Secret", lazy="select", cascade="all, delete-orphan", init=False
     )
 
 

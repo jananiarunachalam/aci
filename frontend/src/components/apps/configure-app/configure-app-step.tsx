@@ -1,5 +1,6 @@
 import { useForm } from "react-hook-form";
 import * as z from "zod";
+import { zodResolver } from "@hookform/resolvers/zod";
 import {
   Form,
   FormControl,
@@ -30,30 +31,74 @@ import { BsQuestionCircle, BsAsterisk } from "react-icons/bs";
 import { Badge } from "@/components/ui/badge";
 import { IdDisplay } from "@/components/apps/id-display";
 import { Checkbox } from "@/components/ui/checkbox";
+import { useCreateAppConfig } from "@/hooks/use-app-config";
+import { toast } from "sonner";
+import { AppAlreadyConfiguredError } from "@/lib/api/appconfig";
 
 export const ConfigureAppFormSchema = z.object({
   security_scheme: z.string().min(1, "Security Scheme is required"),
   client_id: z.string().optional().default(""),
   client_secret: z.string().optional().default(""),
+  redirect_url: z
+    .string()
+    .optional()
+    .default("")
+    .transform((value) => value.trim())
+    .refine(
+      (value) => {
+        if (!value) return true; // Empty is valid (optional field)
+        try {
+          const url = new URL(value);
+          return url.protocol === "http:" || url.protocol === "https:";
+        } catch {
+          return false;
+        }
+      },
+      {
+        message: "Please enter a valid URL starting with http:// or https://",
+      },
+    )
+    .refine(
+      (value) => {
+        if (!value) return true;
+        return value !== defaultRedirectUrl;
+      },
+      // to catch likely user error
+      {
+        message:
+          "Custom redirect URL cannot be the same as ACI.dev's redirect URL",
+      },
+    ),
 });
 export type ConfigureAppFormValues = z.infer<typeof ConfigureAppFormSchema>;
-const oauth2RedirectUrl = `${process.env.NEXT_PUBLIC_API_URL}/v1/linked-accounts/oauth2/callback`;
+const defaultRedirectUrl = `${process.env.NEXT_PUBLIC_API_URL}/v1/linked-accounts/oauth2/callback`;
 
 interface ConfigureAppStepProps {
-  form: ReturnType<typeof useForm<ConfigureAppFormValues>>;
   supported_security_schemes: Record<string, { scope?: string }>;
-  onNext: (values: ConfigureAppFormValues, useACIDevOAuth2: boolean) => void;
+  onNext: (securityScheme: string) => void;
   name: string;
-  isLoading: boolean;
 }
 
 export function ConfigureAppStep({
-  form,
   supported_security_schemes,
   onNext,
   name,
-  isLoading,
 }: ConfigureAppStepProps) {
+  const {
+    mutateAsync: createAppConfigMutation,
+    isPending: isCreatingAppConfig,
+  } = useCreateAppConfig();
+
+  const form = useForm<ConfigureAppFormValues>({
+    resolver: zodResolver(ConfigureAppFormSchema),
+    defaultValues: {
+      security_scheme: Object.keys(supported_security_schemes || {})[0],
+      client_id: "",
+      client_secret: "",
+      redirect_url: "",
+    },
+  });
+
   const currentSecurityScheme = form.watch("security_scheme");
   const { scope = "" } =
     supported_security_schemes?.[currentSecurityScheme] ?? {};
@@ -62,14 +107,28 @@ export function ConfigureAppStep({
   const [useACIDevOAuth2, setUseACIDevOAuth2] = useState(false);
   const clientId = form.watch("client_id");
   const clientSecret = form.watch("client_secret");
+  const redirectUrl = form.watch("redirect_url");
 
-  const [isRedirectConfirmed, setIsRedirectConfirmed] = useState(false);
+  const [isRedirectUrlAdditionConfirmed, setIsRedirectUrlAdditionConfirmed] =
+    useState(false);
+  const [
+    isRedirectUrlForwardingConfirmed,
+    setIsRedirectUrlForwardingConfirmed,
+  ] = useState(false);
   const [isScopeConfirmed, setIsScopeConfirmed] = useState(false);
+
+  // Determine which redirect URL to display - if custom is provided, show it, otherwise show default
+  const effectiveRedirectUrl = redirectUrl || defaultRedirectUrl;
+  const isUsingCustomRedirectUrl = !!redirectUrl;
 
   const isFormValid = () => {
     if (currentSecurityScheme === "oauth2" && !useACIDevOAuth2) {
+      const redirectUrlConfirmed = isUsingCustomRedirectUrl
+        ? isRedirectUrlAdditionConfirmed && isRedirectUrlForwardingConfirmed
+        : isRedirectUrlAdditionConfirmed;
+
       return (
-        !!clientId && !!clientSecret && isRedirectConfirmed && isScopeConfirmed
+        !!clientId && !!clientSecret && redirectUrlConfirmed && isScopeConfirmed
       );
     }
     return true;
@@ -80,13 +139,15 @@ export function ConfigureAppStep({
     if (currentSecurityScheme !== "oauth2") {
       form.setValue("client_id", "");
       form.setValue("client_secret", "");
+      form.setValue("redirect_url", "");
       setUseACIDevOAuth2(false);
-      setIsRedirectConfirmed(false);
+      setIsRedirectUrlAdditionConfirmed(false);
+      setIsRedirectUrlForwardingConfirmed(false);
       setIsScopeConfirmed(false);
     }
   }, [currentSecurityScheme, form]);
 
-  const handleSubmit = (values: ConfigureAppFormValues) => {
+  const handleSubmit = async (values: ConfigureAppFormValues) => {
     if (values.security_scheme === "oauth2" && !useACIDevOAuth2) {
       if (!values.client_id || !values.client_secret) {
         form.setError("client_id", {
@@ -100,7 +161,43 @@ export function ConfigureAppStep({
         return;
       }
     }
-    onNext(values, useACIDevOAuth2);
+
+    try {
+      let security_scheme_overrides = undefined;
+
+      if (
+        values.security_scheme === "oauth2" &&
+        !useACIDevOAuth2 &&
+        !!values.client_id &&
+        !!values.client_secret
+      ) {
+        security_scheme_overrides = {
+          oauth2: {
+            client_id: values.client_id,
+            client_secret: values.client_secret,
+            ...(values.redirect_url && {
+              redirect_url: values.redirect_url,
+            }),
+          },
+        };
+      }
+
+      await createAppConfigMutation({
+        app_name: name,
+        security_scheme: values.security_scheme,
+        security_scheme_overrides,
+      });
+
+      toast.success(`Successfully configured app: ${name}`);
+      onNext(values.security_scheme);
+    } catch (error) {
+      if (error instanceof AppAlreadyConfiguredError) {
+        toast.error(`App configuration already exists for app: ${name}`);
+      } else {
+        console.error("Error configuring app:", error);
+        toast.error(`Failed to configure app. Please try again.`);
+      }
+    }
   };
 
   return (
@@ -196,6 +293,36 @@ export function ConfigureAppStep({
                     </FormItem>
                   )}
                 />
+
+                {/* Custom Redirect URL Option */}
+                <FormField
+                  control={form.control}
+                  name="redirect_url"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel className="flex items-center gap-1">
+                        Custom Redirect URL
+                        <span className="text-xs text-muted-foreground font-normal">
+                          (Optional)
+                        </span>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <BsQuestionCircle className="h-4 w-4 text-muted-foreground cursor-pointer" />
+                          </TooltipTrigger>
+                          <TooltipContent className="max-w-xs">
+                            {`Leave empty to use ACI.dev's default.
+                            For complete whitelabeling, provide your own redirect URL. In this case, your backend should forward
+                            the OAuth2 callback response to ACI.dev's redirect URL.`}
+                          </TooltipContent>
+                        </Tooltip>
+                      </FormLabel>
+                      <FormControl>
+                        <Input {...field} placeholder={defaultRedirectUrl} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
               </div>
 
               {/* right column: read-only information */}
@@ -209,27 +336,50 @@ export function ConfigureAppStep({
                         <BsQuestionCircle className="h-4 w-4 text-muted-foreground cursor-pointer" />
                       </TooltipTrigger>
                       <TooltipContent>
-                        Copy and paste this URL into your OAuth2 app&apos;s
-                        redirect/redirect URI settings
+                        Redirect URL is the URL to which the OAuth2 callback
+                        response will be sent.
                       </TooltipContent>
                     </Tooltip>
                   </FormLabel>
+
                   <div className="pt-2">
-                    <IdDisplay id={oauth2RedirectUrl} />
+                    <IdDisplay id={effectiveRedirectUrl} />
                   </div>
                   <div className="flex items-center gap-1">
                     <Checkbox
-                      checked={isRedirectConfirmed}
+                      checked={isRedirectUrlAdditionConfirmed}
                       onCheckedChange={(checked) =>
-                        setIsRedirectConfirmed(checked === true)
+                        setIsRedirectUrlAdditionConfirmed(checked === true)
                       }
                     />
                     <BsAsterisk className="h-2 w-2 text-red-500" />
-
                     <span className="text-xs">
                       I have added the above redirect URL to my OAuth2 app.
                     </span>
                   </div>
+
+                  {isUsingCustomRedirectUrl && (
+                    <div>
+                      <div className="pt-1">
+                        <IdDisplay id={defaultRedirectUrl} />
+                      </div>
+                      <div className="flex items-center gap-1 mt-2">
+                        <Checkbox
+                          checked={isRedirectUrlForwardingConfirmed}
+                          onCheckedChange={(checked) =>
+                            setIsRedirectUrlForwardingConfirmed(
+                              checked === true,
+                            )
+                          }
+                        />
+                        <BsAsterisk className="h-2 w-2 text-red-500" />
+                        <span className="text-xs">
+                          I have set up my custom redirect URL to forward OAuth2
+                          callback responses to above redirect URL.
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </FormItem>
 
                 {/* Scope */}
@@ -295,8 +445,11 @@ export function ConfigureAppStep({
           )}
 
           <DialogFooter>
-            <Button type="submit" disabled={isLoading || !isFormValid()}>
-              {isLoading ? "Confirming..." : "Confirm"}
+            <Button
+              type="submit"
+              disabled={isCreatingAppConfig || !isFormValid()}
+            >
+              {isCreatingAppConfig ? "Confirming..." : "Confirm"}
             </Button>
           </DialogFooter>
         </form>

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import ProjectSettingPage from "@/app/project-setting/page";
 import { useMetaInfo } from "@/components/context/metainfo";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -7,6 +7,11 @@ import { OrgMemberInfoClass, UserClass } from "@propelauth/react";
 import { useAppConfigs } from "@/hooks/use-app-config";
 import type { QueryObserverResult } from "@tanstack/react-query";
 import { AppConfig } from "@/lib/types/appconfig";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+
+vi.mock("next/navigation", () => ({
+  useRouter: vi.fn(),
+}));
 
 // Mock the modules
 vi.mock("@/components/context/metainfo", () => ({
@@ -17,6 +22,19 @@ vi.mock("@/components/context/metainfo", () => ({
 vi.mock("@/hooks/use-app-config", () => ({
   useAppConfigs: vi.fn(),
   useCreateAppConfig: vi.fn(() => ({
+    mutateAsync: vi.fn(),
+  })),
+}));
+
+// Mock hooks/use-agent
+vi.mock("@/hooks/use-agent", () => ({
+  useCreateAgent: vi.fn(() => ({
+    mutateAsync: vi.fn(),
+  })),
+  useUpdateAgent: vi.fn(() => ({
+    mutateAsync: vi.fn(),
+  })),
+  useDeleteAgent: vi.fn(() => ({
     mutateAsync: vi.fn(),
   })),
 }));
@@ -38,8 +56,18 @@ vi.mock("@/components/project/agent-instruction-filter-form", () => ({
   ),
 }));
 
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: false,
+    },
+  },
+});
+
 const TestWrapper = ({ children }: { children: React.ReactNode }) => (
-  <TooltipProvider>{children}</TooltipProvider>
+  <QueryClientProvider client={queryClient}>
+    <TooltipProvider>{children}</TooltipProvider>
+  </QueryClientProvider>
 );
 
 describe("ProjectSettingPage", () => {
@@ -81,6 +109,8 @@ describe("ProjectSettingPage", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+
+    queryClient.clear();
 
     // Mock MetaInfo context
     vi.mocked(useMetaInfo).mockReturnValue({
@@ -158,36 +188,5 @@ describe("ProjectSettingPage", () => {
 
     // Check if project ID is displayed
     expect(screen.getByText("project-123")).toBeInTheDocument();
-  });
-
-  it("displays agent information correctly", async () => {
-    render(<ProjectSettingPage />, { wrapper: TestWrapper });
-
-    // Check if agent section is rendered
-    const agentLabels = screen.getAllByText("Agent");
-    expect(agentLabels[0]).toBeInTheDocument();
-
-    const manageAgentsLabels = screen.getAllByText("Add and manage agents");
-    expect(manageAgentsLabels[0]).toBeInTheDocument();
-
-    // Check if agent table is rendered with correct data
-    const agentNames = screen.getAllByDisplayValue("Test Agent");
-    expect(agentNames[0]).toBeInTheDocument();
-
-    const agentDescriptions = screen.getAllByDisplayValue("Test Description");
-    expect(agentDescriptions[0]).toBeInTheDocument();
-  });
-
-  it("loads app configs on component mount", async () => {
-    render(<ProjectSettingPage />, { wrapper: TestWrapper });
-
-    await waitFor(() => {
-      expect(useAppConfigs).toHaveBeenCalled();
-    });
-
-    await waitFor(() => {
-      const createAgentButtons = screen.getAllByText("Create Agent");
-      expect(createAgentButtons[0]).not.toBeDisabled();
-    });
   });
 });

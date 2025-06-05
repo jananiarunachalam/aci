@@ -182,18 +182,8 @@ For VS Code users, configure Ruff formatter:
 
 ### Running Tests
 
-Ensure the `db` service is running and the database is empty (in case you have seeded
-the db in `step 6`) before running tests.
-
-> [!NOTE]
-> More specifically, if you have run the `seed_db.sh` script already, you need to bring
-> down docker compose and bring it up again without running the `seed_db.sh` script this
-> time.
-
-Then you can run the test in the `runner` container:
-
 ```bash
-docker compose exec runner pytest
+docker compose exec test-runner pytest
 ```
 
 ## Database Management
@@ -399,6 +389,8 @@ EVALS_OPENAI_KEY=<your_openai_api_key>
 EVALS_WANDB_KEY=<your_wandb_api_key>
 ```
 
+The evaluation results will be logged to [Weights & Biases](https://wandb.ai/aipotheosis-labs/function-search-evaluation) where you can track metrics, view experiment configurations, and analyze the results.
+
 Then, seed the database with all apps and mock credentials:
 
 ```bash
@@ -424,7 +416,10 @@ Additional flags:
 
 ```bash
 # Specify a custom dataset artifact name (default: "synthetic_intent_dataset")
-docker compose exec runner python -m evals.evaluation_pipeline --mode evaluate-only --dataset my_custom_dataset
+docker compose exec runner python -m evals.evaluation_pipeline --mode evaluate-only --dataset_artifact my_custom_artifact
+
+# Specify the filename saved on the dataset artifact
+docker compose exec runner python -m evals.evaluation_pipeline --mode evaluate-only --dataset_filename my_custom_dataset.csv
 
 # Limit the number of samples to generate
 docker compose exec runner python -m evals.evaluation_pipeline --mode generate-only --generation-limit 50

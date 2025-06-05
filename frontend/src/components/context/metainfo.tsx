@@ -17,6 +17,12 @@ import {
 } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { UserClass } from "@propelauth/javascript";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+
+export const metaKeys = {
+  projects: (orgId: string) => ["projects", orgId] as const,
+};
+
 interface MetaInfoContextType {
   user: UserClass;
   orgs: OrgMemberInfoClass[];
@@ -41,7 +47,7 @@ export const MetaInfoProvider = withRequiredAuthInfo<MetaInfoProviderProps>(
   ({ children, userClass, accessToken, refreshAuthInfo }) => {
     const [orgs, setOrgs] = useState<OrgMemberInfoClass[]>([]);
     const [activeOrg, setActiveOrg] = useState<OrgMemberInfoClass | null>(null);
-    const [projects, setProjects] = useState<Project[]>([]);
+    const queryClient = useQueryClient();
     const [activeProject, setActiveProject] = useState<Project | null>(null);
 
     useEffect(() => {
@@ -73,25 +79,56 @@ export const MetaInfoProvider = withRequiredAuthInfo<MetaInfoProviderProps>(
       }
     }, [orgs]);
 
-    const loadProjects = useCallback(async () => {
-      if (activeOrg) {
-        const projects = await getProjects(accessToken, activeOrg.orgId);
-        if (projects.length > 0) {
-          setProjects(projects);
-        }
-      }
-    }, [activeOrg, accessToken]);
-
-    useEffect(() => {
-      loadProjects();
-    }, [loadProjects]);
+    const { data: projects = [] } = useQuery<Project[], Error>({
+      queryKey:
+        activeOrg && accessToken
+          ? metaKeys.projects(activeOrg.orgId)
+          : ["projects"],
+      queryFn: async () => {
+        const fetchedProjects = await getProjects(
+          accessToken,
+          activeOrg!.orgId,
+        );
+        // Sort projects by creation date (oldest first)
+        return [...fetchedProjects].sort(
+          (a, b) =>
+            new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+        );
+      },
+      enabled: !!activeOrg && !!accessToken,
+      retry: 2,
+      retryDelay: 1000,
+    });
 
     useEffect(() => {
       if (projects.length > 0) {
-        // TODO: get active project from local storage
-        setActiveProject(projects[0]);
+        const savedProjectId = localStorage.getItem(
+          `activeProject_${activeOrg?.orgId}`,
+        );
+        const savedProject = savedProjectId
+          ? projects.find((p) => p.id === savedProjectId)
+          : null;
+
+        setActiveProject(savedProject || projects[0]);
       }
-    }, [projects]);
+    }, [projects, activeOrg]);
+
+    useEffect(() => {
+      if (activeProject && activeOrg) {
+        localStorage.setItem(
+          `activeProject_${activeOrg.orgId}`,
+          activeProject.id,
+        );
+      }
+    }, [activeProject, activeOrg]);
+
+    const reloadActiveProject = useCallback(async () => {
+      if (activeOrg && accessToken) {
+        await queryClient.invalidateQueries({
+          queryKey: metaKeys.projects(activeOrg.orgId),
+        });
+      }
+    }, [queryClient, activeOrg, accessToken]);
 
     return (
       <div>
@@ -105,7 +142,7 @@ export const MetaInfoProvider = withRequiredAuthInfo<MetaInfoProviderProps>(
               projects,
               activeProject,
               setActiveProject,
-              reloadActiveProject: loadProjects, // TODO: optimize with TanStack Query to only reload the active project
+              reloadActiveProject,
               accessToken,
             }}
           >
